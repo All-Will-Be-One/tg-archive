@@ -701,17 +701,6 @@ type MediaFilter struct {
 	Types  []string
 }
 
-// mediaTypePredicates maps a type name to the SQL that matches its marker: "photo" and
-// "gif" are bare words, the rest carry a duration/name/size after the word.
-var mediaTypePredicates = map[string]string{
-	"photo":   `m.media = 'photo'`,
-	"gif":     `m.media = 'gif'`,
-	"video":   `m.media LIKE 'video %'`,
-	"voice":   `m.media LIKE 'voice %'`,
-	"sticker": `m.media LIKE 'sticker%'`,
-	"file":    `m.media LIKE 'file%'`,
-}
-
 // PendingMedia lists archived messages that carry media but no downloaded file yet.
 func (s *Store) PendingMedia(f MediaFilter, limit int) ([]Message, error) {
 	q := `SELECT ` + msgCols + ` FROM messages m
@@ -730,7 +719,7 @@ func (s *Store) PendingMedia(f MediaFilter, limit int) ([]Message, error) {
 	if len(f.Types) > 0 {
 		var preds []string
 		for _, t := range f.Types {
-			if p, ok := mediaTypePredicates[t]; ok {
+			if p, ok := typePredicates[t]; ok {
 				preds = append(preds, p)
 			}
 		}
