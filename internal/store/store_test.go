@@ -215,3 +215,40 @@ func TestPendingMediaAndSetFile(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchKindFilterAndSort(t *testing.T) {
+	st, _ := Open(filepath.Join(t.TempDir(), "s.db"))
+	defer st.Close()
+	_ = st.UpsertChat(Chat{ID: 1, Kind: "private", Title: "P", Slug: "p-1"})
+	_ = st.UpsertChat(Chat{ID: 2, Kind: "group", Title: "G", Slug: "g-2"})
+	rows := []Message{
+		{ChatID: 1, ID: 1, Date: "2026-06-01T09:00:00Z", Month: "2026-06", Sender: "a", Text: "trip trip trip"},
+		{ChatID: 2, ID: 2, Date: "2026-06-02T09:00:00Z", Month: "2026-06", Sender: "a", Text: "trip"},
+		{ChatID: 2, ID: 3, Date: "2026-06-03T09:00:00Z", Month: "2026-06", Sender: "a", Text: "trip again"},
+		{ChatID: 1, ID: 4, Date: "2026-06-04T09:00:00Z", Month: "2026-06", Sender: "a", Text: "trip"},
+	}
+	for _, m := range rows {
+		if err := st.SaveMessage(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if h, _ := st.Search("", SearchOpts{Kinds: []string{"group"}, Limit: 10}); len(h) != 2 || h[0].ID != 2 || h[1].ID != 3 {
+		t.Errorf("kind=group returned %v, want [2 3]", ids(h))
+	}
+	// default: the newest N, shown in chat order
+	if h, _ := st.Search("trip", SearchOpts{Limit: 2}); len(h) != 2 || h[0].ID != 3 || h[1].ID != 4 {
+		t.Errorf("newest returned %v, want [3 4]", ids(h))
+	}
+	// oldest: the earliest N, also in chat order
+	if h, _ := st.Search("trip", SearchOpts{Sort: SortOldest, Limit: 2}); len(h) != 2 || h[0].ID != 1 || h[1].ID != 2 {
+		t.Errorf("oldest returned %v, want [1 2]", ids(h))
+	}
+	// relevance: best match first; #1 says "trip" three times
+	if h, _ := st.Search("trip", SearchOpts{Sort: SortRelevance, Limit: 10}); len(h) != 4 || h[0].ID != 1 {
+		t.Errorf("relevance returned %v, want #1 first", ids(h))
+	}
+	// relevance without words means nothing to rank by: same as newest
+	if h, _ := st.Search("", SearchOpts{Sort: SortRelevance, Limit: 2}); len(h) != 2 || h[0].ID != 3 || h[1].ID != 4 {
+		t.Errorf("relevance without words returned %v, want [3 4]", ids(h))
+	}
+}
