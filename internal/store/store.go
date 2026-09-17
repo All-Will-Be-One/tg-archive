@@ -464,20 +464,16 @@ func (s *Store) Around(chatID int64, msgID, span int) ([]Message, error) {
 
 // SearchOpts narrows a search. Zero values mean "no constraint".
 type SearchOpts struct {
-	ChatID int64
-	From   string // YYYY-MM-DD, inclusive
-	To     string // YYYY-MM-DD, inclusive
-	Sender string
-	Limit  int
+	ChatID   int64
+	From     string // YYYY-MM-DD, inclusive
+	To       string // YYYY-MM-DD, inclusive
+	Sender   string // substring of the display name as archived
+	SenderID int64  // exact; survives renames, unlike Sender
+	Limit    int
 }
 
-// Search runs a full-text query. FTS5 with unicode61 folds case for Cyrillic, which LIKE
-// does not, and it ranks by relevance instead of scanning every row.
-func (s *Store) Search(text string, o SearchOpts) ([]Message, error) {
-	q := `SELECT ` + msgColsM + `
-	      FROM messages_fts f JOIN messages m ON m.rowid = f.rowid
-	      WHERE messages_fts MATCH ? AND m.deleted=0`
-	args := []any{ftsQuery(text)}
+// where appends the option filters to q; every search path shares them.
+func (o SearchOpts) where(q string, args []any) (string, []any) {
 	if o.ChatID != 0 {
 		q += ` AND m.chat_id=?`
 		args = append(args, o.ChatID)
@@ -486,9 +482,26 @@ func (s *Store) Search(text string, o SearchOpts) ([]Message, error) {
 		q += ` AND m.sender LIKE ?`
 		args = append(args, "%"+o.Sender+"%")
 	}
+	if o.SenderID != 0 {
+		q += ` AND m.sender_id=?`
+		args = append(args, o.SenderID)
+	}
 	q, args = withDates(q, args, "m.", o.From, o.To)
 	q += ` ORDER BY m.date DESC LIMIT ?`
-	args = append(args, o.Limit)
+	return q, append(args, o.Limit)
+}
+
+// Search runs a full-text query. FTS5 with unicode61 folds case for Cyrillic, which LIKE
+// does not, and it ranks by relevance instead of scanning every row.
+// Empty text skips the index and returns whatever the filters alone select.
+func (s *Store) Search(text string, o SearchOpts) ([]Message, error) {
+	if strings.TrimSpace(text) == "" {
+		q, args := o.where(`SELECT `+msgColsM+` FROM messages m WHERE m.deleted=0`, nil)
+		return s.query(q, args...)
+	}
+	q, args := o.where(`SELECT `+msgColsM+`
+	      FROM messages_fts f JOIN messages m ON m.rowid = f.rowid
+	      WHERE messages_fts MATCH ? AND m.deleted=0`, []any{ftsQuery(text)})
 
 	msgs, err := s.query(q, args...)
 	if err == nil || !isFTSSyntaxErr(err) {
@@ -500,16 +513,8 @@ func (s *Store) Search(text string, o SearchOpts) ([]Message, error) {
 }
 
 func (s *Store) searchLike(text string, o SearchOpts) ([]Message, error) {
-	q := `SELECT ` + msgColsM + ` FROM messages m
-	      WHERE m.text LIKE ? AND m.deleted=0`
-	args := []any{"%" + text + "%"}
-	if o.ChatID != 0 {
-		q += ` AND m.chat_id=?`
-		args = append(args, o.ChatID)
-	}
-	q, args = withDates(q, args, "m.", o.From, o.To)
-	q += ` ORDER BY m.date DESC LIMIT ?`
-	args = append(args, o.Limit)
+	q, args := o.where(`SELECT `+msgColsM+` FROM messages m
+	      WHERE m.text LIKE ? AND m.deleted=0`, []any{"%" + text + "%"})
 	return s.query(q, args...)
 }
 
