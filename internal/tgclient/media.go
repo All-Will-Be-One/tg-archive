@@ -2,11 +2,13 @@ package tgclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
@@ -122,6 +124,49 @@ func extFromMime(mime string) string {
 	return ".bin"
 }
 
+// downloadStall is how long a transfer may go without writing a byte before it is
+// abandoned. A storage DC that never answers shows as a file stuck at 0 bytes; a fixed
+// deadline would either cut off large videos or waste minutes on every stall.
+const downloadStall = 2 * time.Minute
+
+var errStalled = errors.New("no data for " + downloadStall.String())
+
+// downloadTo streams one file to disk, cancelling it if the file stops growing.
+func (c *Client) downloadTo(ctx context.Context, d *downloader.Downloader, loc tg.InputFileLocationClass, abs string) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		var last int64
+		since := time.Now()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				var size int64
+				if fi, err := os.Stat(abs); err == nil {
+					size = fi.Size()
+				}
+				if size != last {
+					last, since = size, time.Now()
+				} else if time.Since(since) >= downloadStall {
+					cancel(errStalled)
+					return
+				}
+			}
+		}
+	}()
+	if _, err := d.Download(c.api, loc).ToPath(ctx, abs); err != nil {
+		if context.Cause(ctx) == errStalled {
+			return errStalled
+		}
+		return err
+	}
+	return nil
+}
+
 // DownloadMedia fetches attachments that the archive has a record of but no file for.
 // It is deliberately a separate pass: history first (cheap, text), files later (expensive),
 // so an interrupted download never costs you the messages.
@@ -180,10 +225,13 @@ func (c *Client) DownloadMedia(ctx context.Context, chatID int64, limit int) (go
 			got++
 			continue
 		}
-		if _, err := d.Download(c.api, loc).ToPath(ctx, abs); err != nil {
+		if err := c.downloadTo(ctx, d, loc, abs); err != nil {
 			fmt.Fprintf(os.Stderr, "  ! %s #%d: %v\n", chat.Title, row.ID, err)
 			os.Remove(abs)
 			skipped++
+			if errors.Is(err, errStalled) {
+				c.mediaDead[key] = struct{}{} // leave it for the next restart
+			}
 			continue
 		}
 		if err := c.st.SetFile(row.ChatID, row.ID, rel); err != nil {
