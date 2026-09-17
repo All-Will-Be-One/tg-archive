@@ -130,21 +130,39 @@ func (c *Client) DownloadMedia(ctx context.Context, chatID int64, limit int) (go
 	if maxBytes < 0 {
 		return 0, 0, fmt.Errorf(`media downloading is off — set "media" to "small" or "all" in the config`)
 	}
-	pending, err := c.st.PendingMedia(chatID, limit)
+	// the window grows with the dead list, so known-dead rows at the top of the newest-first
+	// order do not crowd out older ones that can still be fetched
+	pending, err := c.st.PendingMedia(store.MediaFilter{
+		ChatID: chatID, Kinds: c.cfg.MediaKinds, Types: c.cfg.MediaTypes,
+	}, limit+len(c.mediaDead))
 	if err != nil {
 		return 0, 0, err
 	}
 	d := downloader.NewDownloader()
 	for _, row := range pending {
-		msg, err := c.fetchMessage(ctx, row.ChatID, row.ID)
-		if err != nil || msg == nil {
-			skipped++
+		if got >= limit {
+			break
+		}
+		key := msgKey{row.ChatID, row.ID}
+		if _, dead := c.mediaDead[key]; dead {
 			continue
+		}
+		msg, err := c.fetchMessage(ctx, row.ChatID, row.ID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  ! #%d in chat %d: %v\n", row.ID, row.ChatID, err)
+			skipped++
+			continue // transient (network, flood): try again next pass
+		}
+		if msg == nil {
+			c.mediaDead[key] = struct{}{}
+			skipped++
+			continue // gone from the server
 		}
 		loc, name, ok := mediaLocation(msg, maxBytes)
 		if !ok {
+			c.mediaDead[key] = struct{}{}
 			skipped++
-			continue
+			continue // nothing downloadable (expired, over the size limit, or a poll/location)
 		}
 		chat, err := c.st.Chat(row.ChatID)
 		if err != nil {
