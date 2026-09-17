@@ -470,9 +470,27 @@ const (
 	SortRelevance = "relevance" // best matches first; needs words, else same as newest
 )
 
+// MessageTypes are the values SearchOpts.Types accepts: the attachment kinds mediaDesc
+// writes as markers, plus "text" (no attachment) and "media" (any attachment).
+var MessageTypes = []string{"text", "media", "photo", "video", "voice", "sticker", "gif", "file"}
+
+// typePredicates maps a message type to the SQL that matches its marker: "photo" and
+// "gif" are bare words, the rest carry a duration/name/size after the word.
+var typePredicates = map[string]string{
+	"text":    `(m.media IS NULL OR m.media = '')`,
+	"media":   `(m.media IS NOT NULL AND m.media != '')`,
+	"photo":   `m.media = 'photo'`,
+	"gif":     `m.media = 'gif'`,
+	"video":   `m.media LIKE 'video %'`,
+	"voice":   `m.media LIKE 'voice %'`,
+	"sticker": `m.media LIKE 'sticker%'`,
+	"file":    `m.media LIKE 'file%'`,
+}
+
 type SearchOpts struct {
 	ChatID   int64
 	Kinds    []string // chat kinds (private/group/saved/channel/bot); empty means any
+	Types    []string // message types, see MessageTypes; empty means any
 	From     string   // YYYY-MM-DD, inclusive
 	To       string   // YYYY-MM-DD, inclusive
 	Sender   string   // substring of the display name as archived
@@ -491,6 +509,19 @@ func (o SearchOpts) where(q string, args []any) (string, []any) {
 		q += ` AND m.chat_id IN (SELECT id FROM chats WHERE kind IN (?` + strings.Repeat(",?", len(o.Kinds)-1) + `))`
 		for _, k := range o.Kinds {
 			args = append(args, k)
+		}
+	}
+	if len(o.Types) > 0 {
+		var preds []string
+		for _, t := range o.Types {
+			if p, ok := typePredicates[t]; ok {
+				preds = append(preds, p)
+			}
+		}
+		if len(preds) == 0 {
+			q += ` AND 0` // only unknown types asked for: nothing can match
+		} else {
+			q += ` AND (` + strings.Join(preds, " OR ") + `)`
 		}
 	}
 	if o.Sender != "" {

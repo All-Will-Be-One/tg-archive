@@ -243,6 +243,7 @@ type SearchIn struct {
 	Query    string   `json:"query,omitempty" jsonschema:"words to look for; several words must all appear. Use \"quoted words\" for an exact phrase and trailing * for a prefix. May be empty when chat, sender or sender_id is given"`
 	Chat     string   `json:"chat,omitempty" jsonschema:"limit the search to one chat"`
 	Kinds    []string `json:"kinds,omitempty" jsonschema:"limit to chat kinds: private, group, saved, channel, bot"`
+	Types    []string `json:"types,omitempty" jsonschema:"limit to message types: text, media, photo, video, voice, sticker, gif, file"`
 	Sender   string   `json:"sender,omitempty" jsonschema:"only messages from senders whose name contains this"`
 	SenderID int64    `json:"sender_id,omitempty" jsonschema:"only messages from this user id (exact; unaffected by renames)"`
 	From     string   `json:"from,omitempty" jsonschema:"only messages on or after this date, YYYY-MM-DD"`
@@ -262,8 +263,8 @@ type SearchOut struct {
 }
 
 func (s *Server) searchMessages(ctx context.Context, _ *mcp.CallToolRequest, in SearchIn) (*mcp.CallToolResult, SearchOut, error) {
-	if strings.TrimSpace(in.Query) == "" && in.Chat == "" && len(in.Kinds) == 0 && in.Sender == "" && in.SenderID == 0 {
-		return nil, SearchOut{}, fmt.Errorf("query is required unless chat, kinds, sender or sender_id narrows the search")
+	if strings.TrimSpace(in.Query) == "" && in.Chat == "" && len(in.Kinds) == 0 && len(in.Types) == 0 && in.Sender == "" && in.SenderID == 0 {
+		return nil, SearchOut{}, fmt.Errorf("query is required unless chat, kinds, types, sender or sender_id narrows the search")
 	}
 	switch in.Sort {
 	case "", store.SortNewest, store.SortOldest, store.SortRelevance:
@@ -283,7 +284,7 @@ func (s *Server) searchMessages(ctx context.Context, _ *mcp.CallToolRequest, in 
 		return nil, SearchOut{}, err
 	}
 	msgs, err := s.st.Search(in.Query, store.SearchOpts{
-		ChatID: chatID, Kinds: in.Kinds, Sender: in.Sender, SenderID: in.SenderID, From: in.From, To: in.To, Sort: in.Sort,
+		ChatID: chatID, Kinds: in.Kinds, Types: in.Types, Sender: in.Sender, SenderID: in.SenderID, From: in.From, To: in.To, Sort: in.Sort,
 		Limit: clamp(in.Limit, 30, 200),
 	})
 	if err != nil {

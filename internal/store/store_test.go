@@ -296,3 +296,51 @@ func TestSearchKindFilterAndSort(t *testing.T) {
 		t.Errorf("relevance without words returned %v, want [3 4]", ids(h))
 	}
 }
+
+func TestSearchByMessageType(t *testing.T) {
+	st, _ := Open(filepath.Join(t.TempDir(), "s.db"))
+	defer st.Close()
+	_ = st.UpsertChat(Chat{ID: 1, Kind: "private", Title: "P", Slug: "p-1"})
+	rows := []Message{
+		{ChatID: 1, ID: 1, Date: "2026-06-01T09:00:00Z", Month: "2026-06", Sender: "a", Text: "trip", Media: ""},
+		{ChatID: 1, ID: 2, Date: "2026-06-02T09:00:00Z", Month: "2026-06", Sender: "a", Text: "trip photo", Media: "photo"},
+		{ChatID: 1, ID: 3, Date: "2026-06-03T09:00:00Z", Month: "2026-06", Sender: "a", Text: "", Media: "video 12s 3.4MB"},
+		{ChatID: 1, ID: 4, Date: "2026-06-04T09:00:00Z", Month: "2026-06", Sender: "a", Text: "", Media: "voice 5s"},
+		{ChatID: 1, ID: 5, Date: "2026-06-05T09:00:00Z", Month: "2026-06", Sender: "a", Text: "trip", Media: "sticker 😀"},
+	}
+	for _, m := range rows {
+		if err := st.SaveMessage(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		types []string
+		words string
+		want  []int
+	}{
+		{[]string{"photo"}, "", []int{2}},
+		{[]string{"video", "voice"}, "", []int{3, 4}},
+		{[]string{"text"}, "", []int{1}},
+		{[]string{"media"}, "", []int{2, 3, 4, 5}},
+		{[]string{"photo", "sticker"}, "trip", []int{2, 5}},
+		{[]string{"text"}, "trip", []int{1}},
+		{[]string{"gif"}, "", nil},
+	}
+	for _, c := range cases {
+		h, err := st.Search(c.words, SearchOpts{Types: c.types, Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ids(h)
+		if len(got) != len(c.want) {
+			t.Errorf("types=%v words=%q: got %v, want %v", c.types, c.words, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("types=%v words=%q: got %v, want %v", c.types, c.words, got, c.want)
+				break
+			}
+		}
+	}
+}

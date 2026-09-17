@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -31,7 +32,7 @@ const usage = `tg-archive %s — Markdown archive of your own Telegram
                                 full history; interrupting it loses no progress
   tg-archive live               daemon: new/edited/deleted → .md within ~3s
   tg-archive send --chat X --text "..." [--reply-to N]
-  tg-archive search "words" [--chat X | --kind K] [--sender N | --sender-id I]
+  tg-archive search "words" [--chat X | --kind K] [--type T] [--sender N | --sender-id I]
                     [--from D] [--to D] [--sort newest|oldest|relevance]
                                 full-text search over the archive; with filters, words are
                                 optional
@@ -267,20 +268,18 @@ func cmdSend(ctx context.Context) error {
 	return tgclient.New(cfg, st).Send(ctx, id, *text, *replyTo)
 }
 
-// parseKinds turns "private,group" into a list, rejecting kinds the archive never stores.
-func parseKinds(s string) ([]string, error) {
+// parseList turns "private,group" into a list, rejecting values outside allowed.
+func parseList(s, what string, allowed []string) ([]string, error) {
 	if s == "" {
 		return nil, nil
 	}
 	var out []string
-	for _, k := range strings.Split(s, ",") {
-		k = strings.TrimSpace(k)
-		switch k {
-		case "private", "group", "saved", "channel", "bot":
-			out = append(out, k)
-		default:
-			return nil, fmt.Errorf("unknown chat kind %q: use private, group, saved, channel or bot", k)
+	for _, v := range strings.Split(s, ",") {
+		v = strings.TrimSpace(v)
+		if !slices.Contains(allowed, v) {
+			return nil, fmt.Errorf("unknown %s %q: use one of %s", what, v, strings.Join(allowed, ", "))
 		}
+		out = append(out, v)
 	}
 	return out, nil
 }
@@ -420,19 +419,24 @@ func cmdSearch() error {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
 	chat := fs.String("chat", "", "limit to one chat")
 	kind := fs.String("kind", "", "limit to chat kinds, comma-separated: private,group,saved,channel,bot")
+	typ := fs.String("type", "", "limit to message types, comma-separated: "+strings.Join(store.MessageTypes, ","))
 	sender := fs.String("sender", "", "limit to a sender (part of the name)")
 	senderID := fs.Int64("sender-id", 0, "limit to a sender by user id")
 	from := fs.String("from", "", "on or after YYYY-MM-DD")
 	to := fs.String("to", "", "on or before YYYY-MM-DD")
 	sort := fs.String("sort", store.SortNewest, "newest | oldest | relevance")
 	limit := fs.Int("limit", 40, "max hits")
-	_ = fs.Parse(reorderFlags(os.Args[2:], "chat", "kind", "sender", "sender-id", "from", "to", "sort", "limit"))
+	_ = fs.Parse(reorderFlags(os.Args[2:], "chat", "kind", "type", "sender", "sender-id", "from", "to", "sort", "limit"))
 	// no words is fine when something else narrows it: "everything Anna wrote in June"
-	if fs.NArg() == 0 && *chat == "" && *kind == "" && *sender == "" && *senderID == 0 {
-		return fmt.Errorf(`usage: tg-archive search "words" [--chat X | --kind K] [--sender NAME | --sender-id ID] [--from D] [--to D] [--sort S]
-       without words, give at least one of --chat / --kind / --sender / --sender-id`)
+	if fs.NArg() == 0 && *chat == "" && *kind == "" && *typ == "" && *sender == "" && *senderID == 0 {
+		return fmt.Errorf(`usage: tg-archive search "words" [--chat X | --kind K] [--type T] [--sender NAME | --sender-id ID] [--from D] [--to D] [--sort S]
+       without words, give at least one of --chat / --kind / --type / --sender / --sender-id`)
 	}
-	kinds, err := parseKinds(*kind)
+	kinds, err := parseList(*kind, "chat kind", []string{"private", "group", "saved", "channel", "bot"})
+	if err != nil {
+		return err
+	}
+	types, err := parseList(*typ, "message type", store.MessageTypes)
 	if err != nil {
 		return err
 	}
@@ -448,7 +452,7 @@ func cmdSearch() error {
 	}
 	defer st.Close()
 
-	opts := store.SearchOpts{Kinds: kinds, Sender: *sender, SenderID: *senderID, From: *from, To: *to, Sort: *sort, Limit: *limit}
+	opts := store.SearchOpts{Kinds: kinds, Types: types, Sender: *sender, SenderID: *senderID, From: *from, To: *to, Sort: *sort, Limit: *limit}
 	if *chat != "" {
 		if opts.ChatID, err = resolveChat(st, *chat); err != nil {
 			return err
@@ -472,6 +476,9 @@ func cmdSearch() error {
 			when = t.In(cfg.Location()).Format("2006-01-02 15:04")
 		}
 		body := strings.ReplaceAll(m.Text, "\n", " ")
+		if m.Media != "" { // a caption-less photo or voice note is otherwise a blank line
+			body = strings.TrimSpace("[" + m.Media + "] " + body)
+		}
 		fmt.Printf("%s  %s  %s: %s\n", when, trunc(title, 24), trunc(m.Sender, 16), trunc(body, 90))
 	}
 	fmt.Printf("\n%d hit(s)\n", len(hits))
