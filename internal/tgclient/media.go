@@ -23,6 +23,9 @@ func mediaLocation(m *tg.Message, maxBytes int64) (loc tg.InputFileLocationClass
 	}
 	switch v := media.(type) {
 	case *tg.MessageMediaPhoto:
+		if v.Photo == nil {
+			return nil, "", false
+		}
 		photo, ok := v.Photo.AsNotEmpty()
 		if !ok {
 			return nil, "", false
@@ -37,6 +40,9 @@ func mediaLocation(m *tg.Message, maxBytes int64) (loc tg.InputFileLocationClass
 		}, fmt.Sprintf("%d.jpg", m.ID), true
 
 	case *tg.MessageMediaDocument:
+		if v.Document == nil {
+			return nil, "", false
+		}
 		doc, ok := v.Document.AsNotEmpty()
 		if !ok {
 			return nil, "", false
