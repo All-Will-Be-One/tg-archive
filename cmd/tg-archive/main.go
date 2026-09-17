@@ -31,8 +31,9 @@ const usage = `tg-archive %s — Markdown archive of your own Telegram
                                 full history; interrupting it loses no progress
   tg-archive live               daemon: new/edited/deleted → .md within ~3s
   tg-archive send --chat X --text "..." [--reply-to N]
-  tg-archive search "words" [--chat X] [--from D] [--to D]
-                                full-text search over the archive
+  tg-archive search "words" [--chat X] [--sender N | --sender-id I] [--from D] [--to D]
+                                full-text search over the archive; with filters, words are
+                                optional
   tg-archive media [--chat X] [--limit N]
                                 download attachments for messages that have none yet
   tg-archive doctor [--fix]     find holes in the archived history (and fill them)
@@ -399,13 +400,16 @@ func reorderFlags(args []string, valued ...string) []string {
 func cmdSearch() error {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
 	chat := fs.String("chat", "", "limit to one chat")
-	sender := fs.String("sender", "", "limit to a sender")
+	sender := fs.String("sender", "", "limit to a sender (part of the name)")
+	senderID := fs.Int64("sender-id", 0, "limit to a sender by user id")
 	from := fs.String("from", "", "on or after YYYY-MM-DD")
 	to := fs.String("to", "", "on or before YYYY-MM-DD")
 	limit := fs.Int("limit", 40, "max hits")
-	_ = fs.Parse(reorderFlags(os.Args[2:], "chat", "sender", "from", "to", "limit"))
-	if fs.NArg() == 0 {
-		return fmt.Errorf(`usage: tg-archive search "words" [--chat X] [--from 2026-01-01]`)
+	_ = fs.Parse(reorderFlags(os.Args[2:], "chat", "sender", "sender-id", "from", "to", "limit"))
+	// no words is fine when something else narrows it: "everything Anna wrote in June"
+	if fs.NArg() == 0 && *chat == "" && *sender == "" && *senderID == 0 {
+		return fmt.Errorf(`usage: tg-archive search "words" [--chat X] [--sender NAME | --sender-id ID] [--from D] [--to D]
+       without words, give at least one of --chat / --sender / --sender-id`)
 	}
 
 	cfg, st, err := open()
@@ -414,7 +418,7 @@ func cmdSearch() error {
 	}
 	defer st.Close()
 
-	opts := store.SearchOpts{Sender: *sender, From: *from, To: *to, Limit: *limit}
+	opts := store.SearchOpts{Sender: *sender, SenderID: *senderID, From: *from, To: *to, Limit: *limit}
 	if *chat != "" {
 		if opts.ChatID, err = resolveChat(st, *chat); err != nil {
 			return err
