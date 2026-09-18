@@ -13,6 +13,8 @@ import (
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
 
+	"github.com/tggo/tg-archive/internal/config"
+	"github.com/tggo/tg-archive/internal/dedupe"
 	"github.com/tggo/tg-archive/internal/store"
 )
 
@@ -293,6 +295,20 @@ func (c *Client) FillGap(ctx context.Context, g store.Gap) (int, error) {
 	}
 	return c.fetch(ctx, dialog{id: g.ChatID, title: g.Title, peer: p},
 		fetchOpts{OffsetID: g.BeforeID, MinID: g.AfterID})
+}
+
+// Dedupe replaces byte-identical files under attachments/ with links to the copy that
+// belongs to the earliest message. Needs no connection.
+func Dedupe(cfg *config.Config, st *store.Store, dryRun bool) (dedupe.Report, error) {
+	dates, err := st.FileDates()
+	if err != nil {
+		return dedupe.Report{}, err
+	}
+	root := filepath.Join(cfg.OutDir, "attachments")
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		return dedupe.Report{}, nil
+	}
+	return dedupe.Run(root, func(rel string) string { return dates["attachments/"+rel] }, dryRun)
 }
 
 // DownloadMediaPass is the CLI entry point: connect, download, report.

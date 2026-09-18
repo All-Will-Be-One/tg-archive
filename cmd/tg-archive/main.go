@@ -38,6 +38,7 @@ const usage = `tg-archive %s — Markdown archive of your own Telegram
                                 optional
   tg-archive media [--chat X] [--limit N]
                                 download attachments for messages that have none yet
+  tg-archive dedupe [--dry-run] replace byte-identical attachments with links to one copy
   tg-archive doctor [--fix]     find holes in the archived history (and fill them)
   tg-archive rerender           rebuild every .md from the database
   tg-archive status             what the archive holds right now
@@ -100,6 +101,8 @@ func main() {
 		err = cmdMedia(ctx)
 	case "search":
 		err = cmdSearch()
+	case "dedupe":
+		err = cmdDedupe()
 	case "mcp":
 		err = cmdMCP(ctx)
 	case "import-telethon":
@@ -127,6 +130,40 @@ func open() (*config.Config, *store.Store, error) {
 		return nil, nil, err
 	}
 	return cfg, st, nil
+}
+
+func cmdDedupe() error {
+	fs := flag.NewFlagSet("dedupe", flag.ExitOnError)
+	dryRun := fs.Bool("dry-run", false, "report only, change nothing")
+	_ = fs.Parse(os.Args[2:])
+
+	cfg, st, err := open()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	rep, err := tgclient.Dedupe(cfg, st, *dryRun)
+	if err != nil {
+		return err
+	}
+	did := "replaced"
+	if *dryRun {
+		did = "would replace"
+	}
+	fmt.Printf("scanned %d files, %d duplicate groups: %s %d files, %s\n",
+		rep.Scanned, rep.Groups, did, rep.Linked, humanBytes(rep.Bytes))
+	return nil
+}
+
+func humanBytes(n int64) string {
+	f := float64(n)
+	for _, u := range []string{"B", "KB", "MB", "GB"} {
+		if f < 1024 || u == "GB" {
+			return fmt.Sprintf("%.1f%s", f, u)
+		}
+		f /= 1024
+	}
+	return ""
 }
 
 func cmdSetup() error {

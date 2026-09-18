@@ -269,6 +269,13 @@ func (c *Client) mediaLoop(ctx context.Context) {
 		}
 		if got > 0 {
 			fmt.Printf("%s media downloaded: %d (skipped %d)\n", time.Now().Format("15:04:05"), got, skipped)
+			// new files may be copies of ones already here: keep one on disk
+			rep, err := Dedupe(c.cfg, c.st, false)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "dedupe:", err)
+			} else if rep.Linked > 0 {
+				fmt.Printf("%s dedupe: %d duplicate(s) replaced by links\n", time.Now().Format("15:04:05"), rep.Linked)
+			}
 		}
 	}
 }

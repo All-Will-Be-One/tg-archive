@@ -733,6 +733,25 @@ func (s *Store) PendingMedia(f MediaFilter, limit int) ([]Message, error) {
 	return s.query(q, args...)
 }
 
+// FileDates maps every downloaded attachment path to the date of its earliest message,
+// so a deduplication can keep the first occurrence as the original.
+func (s *Store) FileDates() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT file, MIN(date) FROM messages WHERE file IS NOT NULL AND file != '' GROUP BY file`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var f, d string
+		if err := rows.Scan(&f, &d); err != nil {
+			return nil, err
+		}
+		out[f] = d
+	}
+	return out, rows.Err()
+}
+
 // SetFile records where a downloaded attachment landed.
 func (s *Store) SetFile(chatID int64, msgID int, path string) error {
 	if _, err := s.db.Exec(`UPDATE messages SET file=? WHERE chat_id=? AND id=?`, path, chatID, msgID); err != nil {
